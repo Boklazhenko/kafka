@@ -1,4 +1,4 @@
-module kafka
+module github.com/Boklazhenko/kafka
 
 go 1.14
 
