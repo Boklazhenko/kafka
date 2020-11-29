@@ -57,6 +57,10 @@ func (p *Producer) Run(ctx context.Context) {
 
 	producer, whyNotReady = sarama.NewAsyncProducer(p.addrs, p.cfg)
 
+	if whyNotReady == nil {
+		close(ready)
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -71,7 +75,11 @@ func (p *Producer) Run(ctx context.Context) {
 			time.Sleep(time.Second)
 		}
 
-		close(ready)
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
 
 		wg.Add(1)
 		go func() {
