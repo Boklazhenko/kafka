@@ -189,7 +189,7 @@ func (c *Consumer) Run(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for e := range c.Errors() {
+		for e := range consumerGroup.Errors() {
 			c.errors <- e
 		}
 	}()
@@ -231,7 +231,7 @@ func (c *Consumer) Errors() <-chan error {
 
 type consumerHandler struct {
 	messages chan<- *sarama.ConsumerMessage
-	ctx context.Context
+	ctx      context.Context
 }
 
 func (h *consumerHandler) Setup(session sarama.ConsumerGroupSession) error {
@@ -245,10 +245,15 @@ func (h *consumerHandler) Cleanup(session sarama.ConsumerGroupSession) error {
 func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for msg := range claim.Messages() {
 		select {
-		case h.messages <- msg:
-			session.MarkMessage(msg, "")
 		case <-h.ctx.Done():
-			return nil
+			continue
+		default:
+			select {
+			case h.messages <- msg:
+				session.MarkMessage(msg, "")
+			case <-h.ctx.Done():
+				continue
+			}
 		}
 	}
 	return nil
