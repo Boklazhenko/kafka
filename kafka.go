@@ -122,6 +122,7 @@ func (p *Producer) Run(ctx context.Context) {
 					p.errors <- err
 				}
 			case <-ctx.Done():
+				close(p.input)
 				for msg := range p.input {
 					p.errors <- &sarama.ProducerError{
 						Msg: msg,
