@@ -210,10 +210,10 @@ func (c *Consumer) Run(ctx context.Context) {
 		defer wg.Done()
 		for {
 			if err := consumerGroup.Consume(ctx, c.topics, &consumerHandler{messages: c.messages, ctx: ctx}); err != nil {
-				c.errors <- err
 				if ctx.Err() != nil {
 					return
 				}
+				c.errors <- err
 			}
 		}
 	}()
