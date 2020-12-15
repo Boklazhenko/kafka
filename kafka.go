@@ -160,7 +160,7 @@ type Consumer struct {
 
 func NewConsumer(addrs []string, conf *sarama.Config, groupId string, topics []string) *Consumer {
 	return &Consumer{
-		messages: make(chan *sarama.ConsumerMessage),
+		messages: make(chan *sarama.ConsumerMessage, chanBuffSize),
 		errors:   make(chan error, chanBuffSize),
 		addrs:    addrs,
 		cfg:      conf,
