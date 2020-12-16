@@ -179,12 +179,14 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 	}()
 
+loop:
 	for {
 		select {
 		case <-ctx.Done():
 			if err = consumer.Close(); err != nil {
 				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 			}
+			break loop
 		default:
 			evt := consumer.Poll(100)
 
@@ -202,6 +204,8 @@ func (c *Consumer) Run(ctx context.Context) {
 			}
 		}
 	}
+
+	wg.Wait()
 }
 
 func (c *Consumer) Messages() <-chan *kafka.Message {
