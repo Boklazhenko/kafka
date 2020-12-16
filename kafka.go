@@ -123,13 +123,14 @@ func (p *Producer) Logs() <-chan kafka.LogEvent {
 	return p.logs
 }
 
-func (p *Producer) Errors() <-chan kafka.Event {
+func (p *Producer) Events() <-chan kafka.Event {
 	return p.events
 }
 
 type Consumer struct {
 	messages chan *kafka.Message
-	errors   chan error
+	logs     chan kafka.LogEvent
+	events   chan kafka.Event
 	config   *kafka.ConfigMap
 	topics   []string
 }
@@ -137,20 +138,21 @@ type Consumer struct {
 func NewConsumer(config *kafka.ConfigMap, topics []string) *Consumer {
 	return &Consumer{
 		messages: make(chan *kafka.Message, chanBuffSize),
-		errors:   make(chan error, chanBuffSize),
+		logs:     make(chan kafka.LogEvent, chanBuffSize),
+		events:   make(chan kafka.Event, chanBuffSize),
 		config:   config,
 		topics:   topics,
 	}
 }
 
 func (c *Consumer) Run(ctx context.Context) {
-	defer close(c.errors)
+	defer close(c.events)
 	defer close(c.messages)
 
 	var consumer *kafka.Consumer
 	var err error
 	for consumer, err = kafka.NewConsumer(c.config); err != nil; consumer, err = kafka.NewConsumer(c.config) {
-		c.errors <- err
+		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
 		case <-ctx.Done():
@@ -159,7 +161,7 @@ func (c *Consumer) Run(ctx context.Context) {
 	}
 
 	for err = consumer.SubscribeTopics(c.topics, nil); err != nil; err = consumer.SubscribeTopics(c.topics, nil) {
-		c.errors <- err
+		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
 		case <-ctx.Done():
@@ -167,11 +169,21 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 	}
 
+	wg := sync.WaitGroup{}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for l := range consumer.Logs() {
+			c.logs <- l
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			if err = consumer.Close(); err != nil {
-				c.errors <- err
+				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 			}
 		default:
 			evt := consumer.Poll(100)
@@ -183,8 +195,10 @@ func (c *Consumer) Run(ctx context.Context) {
 			switch e := evt.(type) {
 			case *kafka.Message:
 				c.messages <- e
-			case kafka.Error:
-				c.errors <- e
+			case kafka.LogEvent:
+				c.logs <- e
+			default:
+				c.events <- evt
 			}
 		}
 	}
@@ -194,6 +208,10 @@ func (c *Consumer) Messages() <-chan *kafka.Message {
 	return c.messages
 }
 
-func (c *Consumer) Errors() <-chan error {
-	return c.errors
+func (c *Consumer) Events() <-chan kafka.Event {
+	return c.events
+}
+
+func (c *Consumer) Logs() <-chan kafka.LogEvent {
+	return c.logs
 }
