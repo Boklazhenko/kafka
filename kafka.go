@@ -71,6 +71,7 @@ func (p *Producer) Run(ctx context.Context) {
 
 		select {
 		case <-ctx.Done():
+			producer.Flush(1000)
 			producer.Close()
 		}
 	}()
