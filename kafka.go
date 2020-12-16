@@ -12,7 +12,6 @@ const chanBuffSize = 1000
 
 type Producer struct {
 	input  chan *kafka.Message
-	logs   chan kafka.LogEvent
 	events chan kafka.Event
 	config *kafka.ConfigMap
 }
@@ -20,7 +19,6 @@ type Producer struct {
 func NewProducer(config *kafka.ConfigMap) *Producer {
 	p := &Producer{
 		input:  make(chan *kafka.Message, chanBuffSize),
-		logs:   make(chan kafka.LogEvent, chanBuffSize),
 		events: make(chan kafka.Event, chanBuffSize),
 		config: config,
 	}
@@ -29,7 +27,6 @@ func NewProducer(config *kafka.ConfigMap) *Producer {
 }
 
 func (p *Producer) Run(ctx context.Context) {
-	defer close(p.logs)
 	defer close(p.events)
 
 	ready := make(chan struct{})
@@ -63,14 +60,6 @@ func (p *Producer) Run(ctx context.Context) {
 		default:
 			close(ready)
 		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for l := range producer.Logs() {
-				p.logs <- l
-			}
-		}()
 
 		wg.Add(1)
 		go func() {
@@ -119,17 +108,12 @@ func (p *Producer) Input() chan<- *kafka.Message {
 	return p.input
 }
 
-func (p *Producer) Logs() <-chan kafka.LogEvent {
-	return p.logs
-}
-
 func (p *Producer) Events() <-chan kafka.Event {
 	return p.events
 }
 
 type Consumer struct {
 	messages chan *kafka.Message
-	logs     chan kafka.LogEvent
 	events   chan kafka.Event
 	config   *kafka.ConfigMap
 	topics   []string
@@ -138,7 +122,6 @@ type Consumer struct {
 func NewConsumer(config *kafka.ConfigMap, topics []string) *Consumer {
 	return &Consumer{
 		messages: make(chan *kafka.Message, chanBuffSize),
-		logs:     make(chan kafka.LogEvent, chanBuffSize),
 		events:   make(chan kafka.Event, chanBuffSize),
 		config:   config,
 		topics:   topics,
@@ -169,24 +152,13 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 	}
 
-	wg := sync.WaitGroup{}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for l := range consumer.Logs() {
-			c.logs <- l
-		}
-	}()
-
-loop:
 	for {
 		select {
 		case <-ctx.Done():
 			if err = consumer.Close(); err != nil {
 				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 			}
-			break loop
+			return
 		default:
 			evt := consumer.Poll(100)
 
@@ -197,15 +169,11 @@ loop:
 			switch e := evt.(type) {
 			case *kafka.Message:
 				c.messages <- e
-			case kafka.LogEvent:
-				c.logs <- e
 			default:
 				c.events <- evt
 			}
 		}
 	}
-
-	wg.Wait()
 }
 
 func (c *Consumer) Messages() <-chan *kafka.Message {
@@ -214,8 +182,4 @@ func (c *Consumer) Messages() <-chan *kafka.Message {
 
 func (c *Consumer) Events() <-chan kafka.Event {
 	return c.events
-}
-
-func (c *Consumer) Logs() <-chan kafka.LogEvent {
-	return c.logs
 }
