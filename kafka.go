@@ -3,59 +3,42 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"github.com/Shopify/sarama"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"sync"
 	"time"
 )
 
 const chanBuffSize = 1000
 
-func NewConfig() *sarama.Config {
-	conf := sarama.NewConfig()
-	conf.Version = sarama.V2_5_0_0
-
-	conf.Producer.RequiredAcks = sarama.WaitForAll
-	conf.Producer.MaxMessageBytes = 1000000
-	conf.Producer.Compression = sarama.CompressionGZIP
-	conf.Producer.Retry.Max = 10
-
-	conf.Consumer.Offsets.Initial = sarama.OffsetNewest
-	conf.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategyRoundRobin
-	conf.Consumer.Return.Errors = true
-	return conf
-}
-
 type Producer struct {
-	input     chan *sarama.ProducerMessage
-	successes chan *sarama.ProducerMessage
-	errors    chan *sarama.ProducerError
-	addrs     []string
-	cfg       *sarama.Config
+	input  chan *kafka.Message
+	logs   chan kafka.LogEvent
+	events chan kafka.Event
+	config *kafka.ConfigMap
 }
 
-func NewProducer(addrs []string, conf *sarama.Config) *Producer {
+func NewProducer(config *kafka.ConfigMap) *Producer {
 	p := &Producer{
-		input:     make(chan *sarama.ProducerMessage, chanBuffSize),
-		successes: make(chan *sarama.ProducerMessage, chanBuffSize),
-		errors:    make(chan *sarama.ProducerError, chanBuffSize),
-		addrs:     addrs,
-		cfg:       conf,
+		input:  make(chan *kafka.Message, chanBuffSize),
+		logs:   make(chan kafka.LogEvent, chanBuffSize),
+		events: make(chan kafka.Event, chanBuffSize),
+		config: config,
 	}
 
 	return p
 }
 
 func (p *Producer) Run(ctx context.Context) {
-	defer close(p.successes)
-	defer close(p.errors)
+	defer close(p.logs)
+	defer close(p.events)
 
 	ready := make(chan struct{})
 	var whyNotReady error
 	mu := sync.Mutex{}
 	wg := sync.WaitGroup{}
-	var producer sarama.AsyncProducer
+	var producer *kafka.Producer
 
-	producer, whyNotReady = sarama.NewAsyncProducer(p.addrs, p.cfg)
+	producer, whyNotReady = kafka.NewProducer(p.config)
 
 	if whyNotReady == nil {
 		close(ready)
@@ -67,7 +50,7 @@ func (p *Producer) Run(ctx context.Context) {
 
 		for ; whyNotReady != nil; {
 			mu.Lock()
-			producer, whyNotReady = sarama.NewAsyncProducer(p.addrs, p.cfg)
+			producer, whyNotReady = kafka.NewProducer(p.config)
 			mu.Unlock()
 			if ctx.Err() != nil {
 				return
@@ -84,22 +67,22 @@ func (p *Producer) Run(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for s := range producer.Successes() {
-				p.successes <- s
+			for l := range producer.Logs() {
+				p.logs <- l
 			}
 		}()
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for e := range producer.Errors() {
-				p.errors <- e
+			for evt := range producer.Events() {
+				p.events <- evt
 			}
 		}()
 
 		select {
 		case <-ctx.Done():
-			producer.AsyncClose()
+			producer.Close()
 		}
 	}()
 
@@ -111,23 +94,18 @@ func (p *Producer) Run(ctx context.Context) {
 			case msg := <-p.input:
 				select {
 				case <-ready:
-					producer.Input() <- msg
+					producer.ProduceChannel() <- msg
 				default:
 					mu.Lock()
-					err := &sarama.ProducerError{
-						Msg: msg,
-						Err: whyNotReady,
-					}
+					msg.TopicPartition.Error = whyNotReady
 					mu.Unlock()
-					p.errors <- err
+					p.events <- msg
 				}
 			case <-ctx.Done():
 				close(p.input)
 				for msg := range p.input {
-					p.errors <- &sarama.ProducerError{
-						Msg: msg,
-						Err: fmt.Errorf("producer stopped"),
-					}
+					msg.TopicPartition.Error = fmt.Errorf("producer stopped")
+					p.events <- msg
 				}
 				return
 			}
@@ -137,34 +115,30 @@ func (p *Producer) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-func (p *Producer) Input() chan<- *sarama.ProducerMessage {
+func (p *Producer) Input() chan<- *kafka.Message {
 	return p.input
 }
 
-func (p *Producer) Successes() <-chan *sarama.ProducerMessage {
-	return p.successes
+func (p *Producer) Logs() <-chan kafka.LogEvent {
+	return p.logs
 }
 
-func (p *Producer) Errors() <-chan *sarama.ProducerError {
-	return p.errors
+func (p *Producer) Errors() <-chan kafka.Event {
+	return p.events
 }
 
 type Consumer struct {
-	messages chan *sarama.ConsumerMessage
+	messages chan *kafka.Message
 	errors   chan error
-	addrs    []string
-	cfg      *sarama.Config
-	groupId  string
+	config   *kafka.ConfigMap
 	topics   []string
 }
 
-func NewConsumer(addrs []string, conf *sarama.Config, groupId string, topics []string) *Consumer {
+func NewConsumer(config *kafka.ConfigMap, topics []string) *Consumer {
 	return &Consumer{
-		messages: make(chan *sarama.ConsumerMessage, chanBuffSize),
+		messages: make(chan *kafka.Message, chanBuffSize),
 		errors:   make(chan error, chanBuffSize),
-		addrs:    addrs,
-		cfg:      conf,
-		groupId:  groupId,
+		config:   config,
 		topics:   topics,
 	}
 }
@@ -173,89 +147,53 @@ func (c *Consumer) Run(ctx context.Context) {
 	defer close(c.errors)
 	defer close(c.messages)
 
-	var consumerGroup sarama.ConsumerGroup
+	var consumer *kafka.Consumer
 	var err error
-	for consumerGroup, err = sarama.NewConsumerGroup(c.addrs, c.groupId, c.cfg);
-		err != nil;
-	consumerGroup, err = sarama.NewConsumerGroup(c.addrs, c.groupId, c.cfg) {
+	for consumer, err = kafka.NewConsumer(c.config); err != nil; consumer, err = kafka.NewConsumer(c.config) {
 		c.errors <- err
-		if ctx.Err() != nil {
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
 			return
 		}
-		time.Sleep(time.Second)
 	}
 
-	wg := sync.WaitGroup{}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for e := range consumerGroup.Errors() {
-			c.errors <- e
+	for err = consumer.SubscribeTopics(c.topics, nil); err != nil; err = consumer.SubscribeTopics(c.topics, nil) {
+		c.errors <- err
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			return
 		}
-	}()
+	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	for {
 		select {
 		case <-ctx.Done():
-			if err := consumerGroup.Close(); err != nil {
+			if err = consumer.Close(); err != nil {
 				c.errors <- err
 			}
-		}
-	}()
+		default:
+			evt := consumer.Poll(100)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			if err := consumerGroup.Consume(ctx, c.topics, &consumerHandler{messages: c.messages, ctx: ctx}); err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				c.errors <- err
+			if evt == nil {
+				continue
+			}
+
+			switch e := evt.(type) {
+			case *kafka.Message:
+				c.messages <- e
+			case kafka.Error:
+				c.errors <- e
 			}
 		}
-	}()
-
-	wg.Wait()
+	}
 }
 
-func (c *Consumer) Messages() <-chan *sarama.ConsumerMessage {
+func (c *Consumer) Messages() <-chan *kafka.Message {
 	return c.messages
 }
 
 func (c *Consumer) Errors() <-chan error {
 	return c.errors
-}
-
-type consumerHandler struct {
-	messages chan<- *sarama.ConsumerMessage
-	ctx      context.Context
-}
-
-func (h *consumerHandler) Setup(session sarama.ConsumerGroupSession) error {
-	return nil
-}
-
-func (h *consumerHandler) Cleanup(session sarama.ConsumerGroupSession) error {
-	return nil
-}
-
-func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for msg := range claim.Messages() {
-		select {
-		case <-h.ctx.Done():
-			continue
-		default:
-			select {
-			case h.messages <- msg:
-				session.MarkMessage(msg, "")
-			case <-h.ctx.Done():
-				continue
-			}
-		}
-	}
-	return nil
 }
