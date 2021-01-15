@@ -68,28 +68,28 @@ func (p *Producer) Run(ctx context.Context) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for msg := range p.input {
-			select {
-			case <-ready:
-				producer.ProduceChannel() <- msg
-			default:
-				mu.Lock()
-				msg.TopicPartition.Error = whyNotReady
-				mu.Unlock()
-				p.events <- msg
-			}
+		select {
+		case <-ctx.Done():
+			close(p.input)
 		}
 	}()
 
-	select {
-	case <-ctx.Done():
-		close(p.input)
+	for msg := range p.input {
+		select {
+		case <-ready:
+			producer.ProduceChannel() <- msg
+		default:
+			mu.Lock()
+			msg.TopicPartition.Error = whyNotReady
+			mu.Unlock()
+			p.events <- msg
+		}
 	}
-
-	wg.Wait()
 
 	producer.Flush(1000)
 	producer.Close()
+
+	wg.Wait()
 }
 
 func (p *Producer) Input() chan<- *kafka.Message {
