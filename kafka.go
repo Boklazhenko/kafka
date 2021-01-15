@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"context"
-	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"sync"
 	"time"
@@ -61,48 +60,36 @@ func (p *Producer) Run(ctx context.Context) {
 			close(ready)
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for evt := range producer.Events() {
-				p.events <- evt
-			}
-		}()
-
-		select {
-		case <-ctx.Done():
-			producer.Flush(1000)
-			producer.Close()
+		for evt := range producer.Events() {
+			p.events <- evt
 		}
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for {
+		for msg := range p.input {
 			select {
-			case msg := <-p.input:
-				select {
-				case <-ready:
-					producer.ProduceChannel() <- msg
-				default:
-					mu.Lock()
-					msg.TopicPartition.Error = whyNotReady
-					mu.Unlock()
-					p.events <- msg
-				}
-			case <-ctx.Done():
-				close(p.input)
-				for msg := range p.input {
-					msg.TopicPartition.Error = fmt.Errorf("producer stopped")
-					p.events <- msg
-				}
-				return
+			case <-ready:
+				producer.ProduceChannel() <- msg
+			default:
+				mu.Lock()
+				msg.TopicPartition.Error = whyNotReady
+				mu.Unlock()
+				p.events <- msg
 			}
 		}
 	}()
 
+	select {
+	case <-ctx.Done():
+		close(p.input)
+	}
+
 	wg.Wait()
+
+	producer.Flush(1000)
+	producer.Close()
 }
 
 func (p *Producer) Input() chan<- *kafka.Message {
