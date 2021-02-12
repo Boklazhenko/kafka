@@ -189,21 +189,25 @@ type stats struct {
 	HandleInstanceName       string  `json:"name"`
 	ClientId                 string  `json:"client_id"`
 	ProducerMessageQueueSize float64 `json:"msg_cnt"`
-	BrokersStats             []struct {
-		Name                  string      `json:"name"`
-		OutBuffQueueSize      float64     `json:"outbuff_cnt"`
-		OutMessageQueueSize   float64     `json:"outbuf_msg_cnt"`
-		ReqInFlightCount      float64     `json:"waitresp_cnt"`
-		MessageInfFlightCount float64     `json:"waitresp_msg_cnt"`
-		TxErrorCount          float64     `json:"txerrs"`
-		TxRetryCount          float64     `json:"txretries"`
-		ReqTimeoutCount       float64     `json:"req_timeouts"`
-		RxErrorCount          float64     `json:"rxerrs"`
-		RxCorrIdErrorCount    float64     `json:"rxcorriderrs"`
-		InternalLatency       windowStats `json:"int_latency"`
-		OutBuffLatency        windowStats `json:"outbuf_latency"`
-		RoundTripTime         windowStats `json:"rtt"`
+	Brokers                  struct {
+		Stats []brokerStats
 	} `json:"brokers"`
+}
+
+type brokerStats struct {
+	Name                  string      `json:"name"`
+	OutBuffQueueSize      float64     `json:"outbuff_cnt"`
+	OutMessageQueueSize   float64     `json:"outbuf_msg_cnt"`
+	ReqInFlightCount      float64     `json:"waitresp_cnt"`
+	MessageInfFlightCount float64     `json:"waitresp_msg_cnt"`
+	TxErrorCount          float64     `json:"txerrs"`
+	TxRetryCount          float64     `json:"txretries"`
+	ReqTimeoutCount       float64     `json:"req_timeouts"`
+	RxErrorCount          float64     `json:"rxerrs"`
+	RxCorrIdErrorCount    float64     `json:"rxcorriderrs"`
+	InternalLatency       windowStats `json:"int_latency"`
+	OutBuffLatency        windowStats `json:"outbuf_latency"`
+	RoundTripTime         windowStats `json:"rtt"`
 }
 
 type windowStats struct {
@@ -222,7 +226,7 @@ func handleStatsEvt(statsEvt *kafka.Stats) error {
 
 	producerMessageQueueSizeGauges.WithLabelValues(stats.HandleInstanceName, stats.ClientId).Set(stats.ProducerMessageQueueSize)
 
-	for _, brokerStats := range stats.BrokersStats {
+	for _, brokerStats := range stats.Brokers.Stats {
 		brokerLabelValues := []string{stats.HandleInstanceName, stats.ClientId, brokerStats.Name}
 		brokerOutBuffQueueSizeGauges.WithLabelValues(brokerLabelValues...).Set(brokerStats.OutBuffQueueSize)
 		brokerOutMessageQueueSizeGauges.WithLabelValues(brokerLabelValues...).Set(brokerStats.OutMessageQueueSize)
