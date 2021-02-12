@@ -186,12 +186,10 @@ func (c *Consumer) Events() <-chan kafka.Event {
 }
 
 type stats struct {
-	HandleInstanceName       string  `json:"name"`
-	ClientId                 string  `json:"client_id"`
-	ProducerMessageQueueSize float64 `json:"msg_cnt"`
-	Brokers                  struct {
-		Stats []brokerStats
-	} `json:"brokers"`
+	HandleInstanceName       string                 `json:"name"`
+	ClientId                 string                 `json:"client_id"`
+	ProducerMessageQueueSize float64                `json:"msg_cnt"`
+	BrokersStats             map[string]brokerStats `json:"brokers"`
 }
 
 type brokerStats struct {
@@ -226,7 +224,7 @@ func handleStatsEvt(statsEvt *kafka.Stats) error {
 
 	producerMessageQueueSizeGauges.WithLabelValues(stats.HandleInstanceName, stats.ClientId).Set(stats.ProducerMessageQueueSize)
 
-	for _, brokerStats := range stats.Brokers.Stats {
+	for _, brokerStats := range stats.BrokersStats {
 		brokerLabelValues := []string{stats.HandleInstanceName, stats.ClientId, brokerStats.Name}
 		brokerOutBuffQueueSizeGauges.WithLabelValues(brokerLabelValues...).Set(brokerStats.OutBuffQueueSize)
 		brokerOutMessageQueueSizeGauges.WithLabelValues(brokerLabelValues...).Set(brokerStats.OutMessageQueueSize)
