@@ -109,24 +109,21 @@ func (p *Producer) Events() <-chan kafka.Event {
 }
 
 type Consumer struct {
-	messages chan *kafka.Message
-	events   chan kafka.Event
-	config   *kafka.ConfigMap
-	topics   []string
+	events chan kafka.Event
+	config *kafka.ConfigMap
+	topics []string
 }
 
 func NewConsumer(config *kafka.ConfigMap, topics []string) *Consumer {
 	return &Consumer{
-		messages: make(chan *kafka.Message, chanBuffSize),
-		events:   make(chan kafka.Event, chanBuffSize),
-		config:   config,
-		topics:   topics,
+		events: make(chan kafka.Event, chanBuffSize),
+		config: config,
+		topics: topics,
 	}
 }
 
 func (c *Consumer) Run(ctx context.Context) {
 	defer close(c.events)
-	defer close(c.messages)
 
 	var consumer *kafka.Consumer
 	var err error
@@ -162,23 +159,14 @@ func (c *Consumer) Run(ctx context.Context) {
 				continue
 			}
 
-			switch e := evt.(type) {
-			case *kafka.Message:
-				c.messages <- e
-			default:
-				if stats, ok := evt.(*kafka.Stats); ok {
-					if err = handleStatsEvt(stats); err != nil {
-						c.events <- kafka.NewError(kafka.ErrApplication, fmt.Sprintf("can't parse statistics: %v", err), false)
-					}
+			if stats, ok := evt.(*kafka.Stats); ok {
+				if err = handleStatsEvt(stats); err != nil {
+					c.events <- kafka.NewError(kafka.ErrApplication, fmt.Sprintf("can't parse statistics: %v", err), false)
 				}
-				c.events <- evt
 			}
+			c.events <- evt
 		}
 	}
-}
-
-func (c *Consumer) Messages() <-chan *kafka.Message {
-	return c.messages
 }
 
 func (c *Consumer) Events() <-chan kafka.Event {
