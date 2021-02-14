@@ -190,6 +190,14 @@ type stats struct {
 	ClientId                 string                 `json:"client_id"`
 	ProducerMessageQueueSize float64                `json:"msg_cnt"`
 	BrokersStats             map[string]brokerStats `json:"brokers"`
+	CgrpStats                *cgrpStats             `json:"cgrp"`
+}
+
+type cgrpStats struct {
+	StateAge       float64 `json:"stateage"`
+	RebalanceAge   float64 `json:"rebalance_age"`
+	RebalanceCount float64 `json:"rebalance_cnt"`
+	AssignmentSize float64 `json:"assignment_size"`
 }
 
 type brokerStats struct {
@@ -222,10 +230,19 @@ func handleStatsEvt(statsEvt *kafka.Stats) error {
 		return err
 	}
 
-	producerMessageQueueSizeGauges.WithLabelValues(stats.HandleInstanceName, stats.ClientId).Set(stats.ProducerMessageQueueSize)
+	commonLabelValues := []string{stats.HandleInstanceName, stats.ClientId}
+
+	producerMessageQueueSizeGauges.WithLabelValues(commonLabelValues...).Set(stats.ProducerMessageQueueSize)
+
+	if cgrpStats := stats.CgrpStats; cgrpStats != nil {
+		consumerStateAgeGauges.WithLabelValues(commonLabelValues...).Set(cgrpStats.StateAge)
+		consumerRebalanceAgeGauges.WithLabelValues(commonLabelValues...).Set(cgrpStats.RebalanceAge)
+		consumerRebalanceCountGauges.WithLabelValues(commonLabelValues...).Set(cgrpStats.RebalanceCount)
+		consumerAssignmentSizeGauges.WithLabelValues(commonLabelValues...).Set(cgrpStats.AssignmentSize)
+	}
 
 	for _, brokerStats := range stats.BrokersStats {
-		brokerLabelValues := []string{stats.HandleInstanceName, stats.ClientId, brokerStats.Name}
+		brokerLabelValues := append(commonLabelValues, brokerStats.Name)
 		brokerOutBuffQueueSizeGauges.WithLabelValues(brokerLabelValues...).Set(brokerStats.OutBuffQueueSize)
 		brokerOutMessageQueueSizeGauges.WithLabelValues(brokerLabelValues...).Set(brokerStats.OutMessageQueueSize)
 		brokerReqInFlightCountGauges.WithLabelValues(brokerLabelValues...).Set(brokerStats.ReqInFlightCount)
@@ -262,6 +279,10 @@ var brokerRxCorrIdErrorCountGauges *prometheus.GaugeVec
 var brokerIntLatencyGauges *prometheus.GaugeVec
 var brokerOutBuffLatencyGauges *prometheus.GaugeVec
 var brokerRttGauges *prometheus.GaugeVec
+var consumerStateAgeGauges *prometheus.GaugeVec
+var consumerRebalanceAgeGauges *prometheus.GaugeVec
+var consumerRebalanceCountGauges *prometheus.GaugeVec
+var consumerAssignmentSizeGauges *prometheus.GaugeVec
 
 func init() {
 	producerMessageQueueSizeGauges = prometheus.NewGaugeVec(
@@ -370,8 +391,41 @@ func init() {
 			Help:      "Broker latency / round-trip time in microseconds.",
 		}, []string{"handle_instance_name", "client_id", "broker_name", "quantile"})
 
+	consumerStateAgeGauges = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "kafka",
+			Subsystem: "consumer",
+			Name:      "state_age",
+			Help:      "Time elapsed since last state change (milliseconds)",
+		}, []string{"handle_instance_name", "client_id"})
+
+	consumerRebalanceAgeGauges = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "kafka",
+			Subsystem: "consumer",
+			Name:      "rebalance_age",
+			Help:      "Time elapsed since last rebalance (assign or revoke) (milliseconds)",
+		}, []string{"handle_instance_name", "client_id"})
+
+	consumerRebalanceCountGauges = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "kafka",
+			Subsystem: "consumer",
+			Name:      "rebalance_count",
+			Help:      "Total number of rebalances (assign or revoke)",
+		}, []string{"handle_instance_name", "client_id"})
+
+	consumerAssignmentSizeGauges = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "kafka",
+			Subsystem: "consumer",
+			Name:      "assignment_size",
+			Help:      "Current assignment's partition count",
+		}, []string{"handle_instance_name", "client_id"})
+
 	prometheus.MustRegister(producerMessageQueueSizeGauges, brokerOutBuffQueueSizeGauges, brokerOutMessageQueueSizeGauges,
 		brokerReqInFlightCountGauges, brokerMessageInFlightCountGauges, brokerTxErrorCountGauges, brokerTxRetryCountGauges,
 		brokerReqTimeoutCountGauges, brokerRxErrorCountGauges, brokerRxCorrIdErrorCountGauges, brokerIntLatencyGauges,
-		brokerOutBuffLatencyGauges, brokerRttGauges)
+		brokerOutBuffLatencyGauges, brokerRttGauges, consumerStateAgeGauges, consumerRebalanceAgeGauges,
+		consumerRebalanceCountGauges, consumerAssignmentSizeGauges)
 }
