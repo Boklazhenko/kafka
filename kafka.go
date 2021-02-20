@@ -138,7 +138,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 	}
 
-	for err = consumer.SubscribeTopics(c.topics, nil); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
+	for err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
 		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
