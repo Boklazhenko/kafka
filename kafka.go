@@ -109,16 +109,18 @@ func (p *Producer) Events() <-chan kafka.Event {
 }
 
 type Consumer struct {
-	events chan kafka.Event
-	config *kafka.ConfigMap
-	topics []string
+	events      chan kafka.Event
+	config      *kafka.ConfigMap
+	topics      []string
+	rebalanceCb kafka.RebalanceCb
 }
 
-func NewConsumer(config *kafka.ConfigMap, topics []string) *Consumer {
+func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.RebalanceCb) *Consumer {
 	return &Consumer{
-		events: make(chan kafka.Event, chanBuffSize),
-		config: config,
-		topics: topics,
+		events:      make(chan kafka.Event, chanBuffSize),
+		config:      config,
+		topics:      topics,
+		rebalanceCb: rebalanceCb,
 	}
 }
 
@@ -136,7 +138,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 	}
 
-	for err = consumer.SubscribeTopics(c.topics, nil); err != nil; err = consumer.SubscribeTopics(c.topics, nil) {
+	for err = consumer.SubscribeTopics(c.topics, nil); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
 		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
