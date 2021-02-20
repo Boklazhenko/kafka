@@ -12,6 +12,19 @@ import (
 
 const chanBuffSize = 1000
 
+type PauseEvent struct {
+	tp    []kafka.TopicPartition
+	pause bool
+}
+
+func (p PauseEvent) String() string {
+	if p.pause {
+		return fmt.Sprintf("paused: %v", p.tp)
+	} else {
+		return fmt.Sprintf("unpaused: %v", p.tp)
+	}
+}
+
 type Producer struct {
 	input  chan *kafka.Message
 	events chan kafka.Event
@@ -113,6 +126,7 @@ type Consumer struct {
 	config      *kafka.ConfigMap
 	topics      []string
 	rebalanceCb kafka.RebalanceCb
+	pauseCh     chan bool
 }
 
 func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.RebalanceCb) *Consumer {
@@ -121,6 +135,7 @@ func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.Reb
 		config:      config,
 		topics:      topics,
 		rebalanceCb: rebalanceCb,
+		pauseCh:     make(chan bool, chanBuffSize),
 	}
 }
 
@@ -133,6 +148,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
+		case <-c.pauseCh:
 		case <-ctx.Done():
 			return
 		}
@@ -142,18 +158,59 @@ func (c *Consumer) Run(ctx context.Context) {
 		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
+		case <-c.pauseCh:
 		case <-ctx.Done():
 			return
 		}
 	}
 
+	consumption := true
 	for {
 		select {
 		case <-ctx.Done():
 			if err = consumer.Close(); err != nil {
 				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 			}
+			for _ = range c.pauseCh {
+
+			}
 			return
+		case pause := <-c.pauseCh:
+			if pause {
+				if consumption {
+					tp, err := consumer.Assignment()
+					if err == nil {
+						if err = consumer.Pause(tp); err != nil {
+							c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+						} else {
+							consumption = false
+							c.events <- PauseEvent{
+								tp:    tp,
+								pause: true,
+							}
+						}
+					} else {
+						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					}
+				}
+			} else {
+				if !consumption {
+					tp, err := consumer.Assignment()
+					if err == nil {
+						if err = consumer.Resume(tp); err != nil {
+							c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+						} else {
+							consumption = true
+							c.events <- PauseEvent{
+								tp:    tp,
+								pause: false,
+							}
+						}
+					} else {
+						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					}
+				}
+			}
 		default:
 			evt := consumer.Poll(100)
 
@@ -169,6 +226,10 @@ func (c *Consumer) Run(ctx context.Context) {
 			c.events <- evt
 		}
 	}
+}
+
+func (c *Consumer) Pause(pause bool) {
+	c.pauseCh <- pause
 }
 
 func (c *Consumer) Events() <-chan kafka.Event {
