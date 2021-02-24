@@ -171,9 +171,6 @@ func (c *Consumer) Run(ctx context.Context) {
 			if err = consumer.Close(); err != nil {
 				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 			}
-			for _ = range c.pauseCh {
-
-			}
 			return
 		case pause := <-c.pauseCh:
 			if pause {
