@@ -13,15 +13,20 @@ import (
 const chanBuffSize = 1000
 
 type PauseEvent struct {
-	tp    []kafka.TopicPartition
+	tps   []kafka.TopicPartition
 	pause bool
+}
+
+type pauseTask struct {
+	pause  bool
+	topics []string
 }
 
 func (p PauseEvent) String() string {
 	if p.pause {
-		return fmt.Sprintf("paused: %v", p.tp)
+		return fmt.Sprintf("paused: %v", p.tps)
 	} else {
-		return fmt.Sprintf("unpaused: %v", p.tp)
+		return fmt.Sprintf("unpaused: %v", p.tps)
 	}
 }
 
@@ -126,7 +131,7 @@ type Consumer struct {
 	config      *kafka.ConfigMap
 	topics      []string
 	rebalanceCb kafka.RebalanceCb
-	pauseCh     chan bool
+	pauseCh     chan pauseTask
 }
 
 func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.RebalanceCb) *Consumer {
@@ -135,7 +140,7 @@ func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.Reb
 		config:      config,
 		topics:      topics,
 		rebalanceCb: rebalanceCb,
-		pauseCh:     make(chan bool, chanBuffSize),
+		pauseCh:     make(chan pauseTask, chanBuffSize),
 	}
 }
 
@@ -172,17 +177,26 @@ func (c *Consumer) Run(ctx context.Context) {
 				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 			}
 			return
-		case pause := <-c.pauseCh:
-			if pause {
+		case pauseTask := <-c.pauseCh:
+			if pauseTask.pause {
 				if consumption {
-					tp, err := consumer.Assignment()
+					tps, err := consumer.Assignment()
 					if err == nil {
-						if err = consumer.Pause(tp); err != nil {
+						res := make([]kafka.TopicPartition, 0)
+						for _, tp := range tps {
+							for _, t := range pauseTask.topics {
+								if t == *tp.Topic {
+									res = append(res, tp)
+									break
+								}
+							}
+						}
+						if err = consumer.Pause(res); err != nil {
 							c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 						} else {
 							consumption = false
 							c.events <- PauseEvent{
-								tp:    tp,
+								tps:   res,
 								pause: true,
 							}
 						}
@@ -192,14 +206,23 @@ func (c *Consumer) Run(ctx context.Context) {
 				}
 			} else {
 				if !consumption {
-					tp, err := consumer.Assignment()
+					tps, err := consumer.Assignment()
+					res := make([]kafka.TopicPartition, 0)
+					for _, tp := range tps {
+						for _, t := range pauseTask.topics {
+							if t == *tp.Topic {
+								res = append(res, tp)
+								break
+							}
+						}
+					}
 					if err == nil {
-						if err = consumer.Resume(tp); err != nil {
+						if err = consumer.Resume(res); err != nil {
 							c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 						} else {
 							consumption = true
 							c.events <- PauseEvent{
-								tp:    tp,
+								tps:   res,
 								pause: false,
 							}
 						}
@@ -225,8 +248,11 @@ func (c *Consumer) Run(ctx context.Context) {
 	}
 }
 
-func (c *Consumer) Pause(pause bool) {
-	c.pauseCh <- pause
+func (c *Consumer) Pause(pause bool, topics ...string) {
+	c.pauseCh <- pauseTask{
+		pause:  pause,
+		topics: topics,
+	}
 }
 
 func (c *Consumer) Events() <-chan kafka.Event {
