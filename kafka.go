@@ -169,7 +169,6 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 	}
 
-	consumption := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -179,27 +178,21 @@ func (c *Consumer) Run(ctx context.Context) {
 			return
 		case pauseTask := <-c.pauseTaskCh:
 			if pauseTask.pause {
-				if consumption {
-					if err = consumer.Pause([]kafka.TopicPartition{pauseTask.tp}); err != nil {
-						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-					} else {
-						consumption = false
-						c.events <- PauseEvent{
-							tp:    pauseTask.tp,
-							pause: true,
-						}
+				if err = consumer.Pause([]kafka.TopicPartition{pauseTask.tp}); err != nil {
+					c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+				} else {
+					c.events <- PauseEvent{
+						tp:    pauseTask.tp,
+						pause: true,
 					}
 				}
 			} else {
-				if !consumption {
-					if err = consumer.Resume([]kafka.TopicPartition{pauseTask.tp}); err != nil {
-						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-					} else {
-						consumption = true
-						c.events <- PauseEvent{
-							tp:    pauseTask.tp,
-							pause: false,
-						}
+				if err = consumer.Resume([]kafka.TopicPartition{pauseTask.tp}); err != nil {
+					c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+				} else {
+					c.events <- PauseEvent{
+						tp:    pauseTask.tp,
+						pause: false,
 					}
 				}
 			}
