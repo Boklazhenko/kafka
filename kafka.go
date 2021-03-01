@@ -12,16 +12,21 @@ import (
 
 const chanBuffSize = 1000
 
+type pauseTask struct {
+	pause bool
+	tp    kafka.TopicPartition
+}
+
 type PauseEvent struct {
-	tps   []kafka.TopicPartition
+	tp    kafka.TopicPartition
 	pause bool
 }
 
 func (p PauseEvent) String() string {
 	if p.pause {
-		return fmt.Sprintf("paused: %v", p.tps)
+		return fmt.Sprintf("paused: %v", p.tp)
 	} else {
-		return fmt.Sprintf("unpaused: %v", p.tps)
+		return fmt.Sprintf("unpaused: %v", p.tp)
 	}
 }
 
@@ -126,7 +131,7 @@ type Consumer struct {
 	config      *kafka.ConfigMap
 	topics      []string
 	rebalanceCb kafka.RebalanceCb
-	pauseCh     chan bool
+	pauseTaskCh chan pauseTask
 }
 
 func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.RebalanceCb) *Consumer {
@@ -135,7 +140,7 @@ func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.Reb
 		config:      config,
 		topics:      topics,
 		rebalanceCb: rebalanceCb,
-		pauseCh:     make(chan bool, chanBuffSize),
+		pauseTaskCh: make(chan pauseTask, chanBuffSize),
 	}
 }
 
@@ -148,7 +153,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
-		case <-c.pauseCh:
+		case <-c.pauseTaskCh:
 		case <-ctx.Done():
 			return
 		}
@@ -158,7 +163,7 @@ func (c *Consumer) Run(ctx context.Context) {
 		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 		select {
 		case <-time.After(time.Second):
-		case <-c.pauseCh:
+		case <-c.pauseTaskCh:
 		case <-ctx.Done():
 			return
 		}
@@ -172,37 +177,29 @@ func (c *Consumer) Run(ctx context.Context) {
 				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 			}
 			return
-		case pause := <-c.pauseCh:
-			if pause {
+		case pauseTask := <-c.pauseTaskCh:
+			if pauseTask.pause {
 				if consumption {
-					if tps, err := consumer.Assignment(); err == nil {
-						if err = consumer.Pause(tps); err != nil {
-							c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-						} else {
-							consumption = false
-							c.events <- PauseEvent{
-								tps:   tps,
-								pause: true,
-							}
-						}
-					} else {
+					if err = consumer.Pause([]kafka.TopicPartition{pauseTask.tp}); err != nil {
 						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					} else {
+						consumption = false
+						c.events <- PauseEvent{
+							tp:    pauseTask.tp,
+							pause: true,
+						}
 					}
 				}
 			} else {
 				if !consumption {
-					if tps, err := consumer.Assignment(); err == nil {
-						if err = consumer.Resume(tps); err != nil {
-							c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-						} else {
-							consumption = true
-							c.events <- PauseEvent{
-								tps:   tps,
-								pause: false,
-							}
-						}
-					} else {
+					if err = consumer.Resume([]kafka.TopicPartition{pauseTask.tp}); err != nil {
 						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					} else {
+						consumption = true
+						c.events <- PauseEvent{
+							tp:    pauseTask.tp,
+							pause: false,
+						}
 					}
 				}
 			}
@@ -223,8 +220,11 @@ func (c *Consumer) Run(ctx context.Context) {
 	}
 }
 
-func (c *Consumer) Pause(pause bool) {
-	c.pauseCh <- pause
+func (c *Consumer) Pause(pause bool, tp kafka.TopicPartition) {
+	c.pauseTaskCh <- pauseTask{
+		pause: pause,
+		tp:    tp,
+	}
 }
 
 func (c *Consumer) Events() <-chan kafka.Event {
