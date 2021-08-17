@@ -49,73 +49,74 @@ func NewProducer(config *kafka.ConfigMap) *Producer {
 func (p *Producer) Run(ctx context.Context) {
 	defer close(p.events)
 
-	ready := make(chan struct{})
-	var whyNotReady error
-	mu := sync.Mutex{}
-	wg := sync.WaitGroup{}
-	var producer *kafka.Producer
+	for {
+		var producer *kafka.Producer
+		var err error
 
-	producer, whyNotReady = kafka.NewProducer(p.config)
-
-	if whyNotReady == nil {
-		close(ready)
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		for ; whyNotReady != nil; {
-			mu.Lock()
-			producer, whyNotReady = kafka.NewProducer(p.config)
-			mu.Unlock()
-			if ctx.Err() != nil {
-				return
-			}
-			time.Sleep(time.Second)
-		}
-
-		select {
-		case <-ready:
-		default:
-			close(ready)
-		}
-
-		for evt := range producer.Events() {
-			if stats, ok := evt.(*kafka.Stats); ok {
-				if err := handleStatsEvt(stats); err != nil {
-					p.events <- kafka.NewError(kafka.ErrApplication, fmt.Sprintf("can't parse statistics: %v", err), false)
+		for producer, err = kafka.NewProducer(p.config); err != nil; producer, err = kafka.NewProducer(p.config) {
+			p.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+			timeout := time.After(time.Second)
+		loop:
+			for {
+				select {
+				case <-timeout:
+					break loop
+				case <-ctx.Done():
+					return
+				case msg := <-p.input:
+					msg.TopicPartition.Error = err
+					p.events <- msg
 				}
 			}
-			p.events <- evt
 		}
-	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+		wg := sync.WaitGroup{}
+
+		fatalErrCh := make(chan struct{})
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for evt := range producer.Events() {
+				if stats, ok := evt.(*kafka.Stats); ok {
+					if err := handleStatsEvt(stats); err != nil {
+						p.events <- kafka.NewError(kafka.ErrApplication, fmt.Sprintf("can't parse statistics: %v", err), false)
+					}
+				}
+				p.events <- evt
+				if errEvt, ok := evt.(kafka.Error); ok && errEvt.IsFatal() {
+					select {
+					case <-fatalErrCh:
+					default:
+						close(fatalErrCh)
+					}
+				}
+			}
+		}()
+
+	loop2:
+		for {
+			select {
+			case msg := <-p.input:
+				producer.ProduceChannel() <- msg
+			case <-ctx.Done():
+				break loop2
+			case <-fatalErrCh:
+				break loop2
+			}
+		}
+
+		producer.Flush(1000)
+		producer.Close()
+
+		wg.Wait()
+
 		select {
 		case <-ctx.Done():
-			close(p.input)
-		}
-	}()
-
-	for msg := range p.input {
-		select {
-		case <-ready:
-			producer.ProduceChannel() <- msg
+			return
 		default:
-			mu.Lock()
-			msg.TopicPartition.Error = whyNotReady
-			mu.Unlock()
-			p.events <- msg
 		}
 	}
-
-	producer.Flush(1000)
-	producer.Close()
-
-	wg.Wait()
 }
 
 func (p *Producer) Input() chan<- *kafka.Message {
@@ -147,68 +148,85 @@ func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.Reb
 func (c *Consumer) Run(ctx context.Context) {
 	defer close(c.events)
 
-	var consumer *kafka.Consumer
-	var err error
-	for consumer, err = kafka.NewConsumer(c.config); err != nil; consumer, err = kafka.NewConsumer(c.config) {
-		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-		select {
-		case <-time.After(time.Second):
-		case <-c.pauseTaskCh:
-		case <-ctx.Done():
-			return
-		}
-	}
-
-	for err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
-		c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-		select {
-		case <-time.After(time.Second):
-		case <-c.pauseTaskCh:
-		case <-ctx.Done():
-			return
-		}
-	}
-
 	for {
-		select {
-		case <-ctx.Done():
-			if err = consumer.Close(); err != nil {
-				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+		var consumer *kafka.Consumer
+		var err error
+		for consumer, err = kafka.NewConsumer(c.config); err != nil; consumer, err = kafka.NewConsumer(c.config) {
+			c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+			timeout := time.After(time.Second)
+		loop1:
+			for {
+				select {
+				case <-timeout:
+					break loop1
+				case <-c.pauseTaskCh:
+				case <-ctx.Done():
+					return
+				}
 			}
-			return
-		case pauseTask := <-c.pauseTaskCh:
-			if pauseTask.pause {
-				if err = consumer.Pause([]kafka.TopicPartition{pauseTask.tp}); err != nil {
+		}
+
+		for err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
+			c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+			timeout := time.After(time.Second)
+		loop2:
+			for {
+				select {
+				case <-timeout:
+					break loop2
+				case <-c.pauseTaskCh:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+
+	loop:
+		for {
+			select {
+			case <-ctx.Done():
+				if err = consumer.Close(); err != nil {
 					c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+				}
+				return
+			case pauseTask := <-c.pauseTaskCh:
+				if pauseTask.pause {
+					if err = consumer.Pause([]kafka.TopicPartition{pauseTask.tp}); err != nil {
+						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					} else {
+						c.events <- PauseEvent{
+							tp:    pauseTask.tp,
+							pause: true,
+						}
+					}
 				} else {
-					c.events <- PauseEvent{
-						tp:    pauseTask.tp,
-						pause: true,
+					if err = consumer.Resume([]kafka.TopicPartition{pauseTask.tp}); err != nil {
+						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					} else {
+						c.events <- PauseEvent{
+							tp:    pauseTask.tp,
+							pause: false,
+						}
 					}
 				}
-			} else {
-				if err = consumer.Resume([]kafka.TopicPartition{pauseTask.tp}); err != nil {
-					c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-				} else {
-					c.events <- PauseEvent{
-						tp:    pauseTask.tp,
-						pause: false,
+			default:
+				evt := consumer.Poll(100)
+
+				if evt == nil {
+					continue
+				}
+
+				if stats, ok := evt.(*kafka.Stats); ok {
+					if err = handleStatsEvt(stats); err != nil {
+						c.events <- kafka.NewError(kafka.ErrApplication, fmt.Sprintf("can't parse statistics: %v", err), false)
 					}
 				}
-			}
-		default:
-			evt := consumer.Poll(100)
+				c.events <- evt
 
-			if evt == nil {
-				continue
-			}
-
-			if stats, ok := evt.(*kafka.Stats); ok {
-				if err = handleStatsEvt(stats); err != nil {
-					c.events <- kafka.NewError(kafka.ErrApplication, fmt.Sprintf("can't parse statistics: %v", err), false)
+				if errEvt, ok := evt.(kafka.Error); ok && errEvt.IsFatal() {
+					break loop
 				}
 			}
-			c.events <- evt
 		}
 	}
 }
