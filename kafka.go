@@ -133,6 +133,7 @@ type Consumer struct {
 	topics      []string
 	rebalanceCb kafka.RebalanceCb
 	pauseTaskCh chan pauseTask
+	ready       chan struct{}
 }
 
 func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.RebalanceCb) *Consumer {
@@ -142,6 +143,7 @@ func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.Reb
 		topics:      topics,
 		rebalanceCb: rebalanceCb,
 		pauseTaskCh: make(chan pauseTask, chanBuffSize),
+		ready:       make(chan struct{}),
 	}
 }
 
@@ -179,6 +181,12 @@ func (c *Consumer) Run(ctx context.Context) {
 					return
 				}
 			}
+		}
+
+		select {
+		case <-c.ready:
+		default:
+			close(c.ready)
 		}
 
 	loop:
@@ -240,6 +248,10 @@ func (c *Consumer) Pause(pause bool, tp kafka.TopicPartition) {
 
 func (c *Consumer) Events() <-chan kafka.Event {
 	return c.events
+}
+
+func (c *Consumer) Ready() <-chan struct{} {
+	return c.ready
 }
 
 type stats struct {
