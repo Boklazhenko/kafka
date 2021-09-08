@@ -24,6 +24,7 @@ type PauseEvent struct {
 
 type subscribeTask struct {
 	subscribe bool
+	done      chan struct{}
 }
 
 func (p PauseEvent) String() string {
@@ -138,6 +139,7 @@ type Consumer struct {
 	rebalanceCb     kafka.RebalanceCb
 	pauseTaskCh     chan pauseTask
 	subscribeTaskCh chan subscribeTask
+	subscribed      bool
 }
 
 func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.RebalanceCb) *Consumer {
@@ -148,6 +150,7 @@ func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.Reb
 		rebalanceCb:     rebalanceCb,
 		pauseTaskCh:     make(chan pauseTask, chanBuffSize),
 		subscribeTaskCh: make(chan subscribeTask, chanBuffSize),
+		subscribed:      false,
 	}
 }
 
@@ -155,15 +158,15 @@ func (c *Consumer) Run(ctx context.Context) {
 	defer close(c.events)
 
 	for {
+		c.subscribed = false
 		var consumer *kafka.Consumer
 		var err error
 		for consumer, err = kafka.NewConsumer(c.config); err != nil; consumer, err = kafka.NewConsumer(c.config) {
 			c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-			timeout := time.After(time.Second)
 		loop1:
 			for {
 				select {
-				case <-timeout:
+				case <-time.After(time.Second):
 					break loop1
 				case <-ctx.Done():
 					return
@@ -173,17 +176,18 @@ func (c *Consumer) Run(ctx context.Context) {
 
 		for err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
 			c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-			timeout := time.After(time.Second)
 		loop2:
 			for {
 				select {
-				case <-timeout:
+				case <-time.After(time.Second):
 					break loop2
 				case <-ctx.Done():
 					return
 				}
 			}
 		}
+
+		c.subscribed = true
 
 	loop:
 		for {
@@ -214,15 +218,42 @@ func (c *Consumer) Run(ctx context.Context) {
 					}
 				}
 			case subscribeTask := <-c.subscribeTaskCh:
-				if subscribeTask.subscribe {
-					if err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil {
+				if subscribeTask.subscribe && !c.subscribed {
+					for err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
 						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					l1:
+						for {
+							select {
+							case <-time.After(time.Second):
+								break l1
+							case <-ctx.Done():
+								if err = consumer.Close(); err != nil {
+									c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+								}
+								return
+							}
+						}
 					}
-				} else {
-					if err = consumer.Unsubscribe(); err != nil {
+					c.subscribed = true
+				} else if !subscribeTask.subscribe && c.subscribed {
+					for err = consumer.Unsubscribe(); err != nil; err = consumer.Unsubscribe() {
 						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					l2:
+						for {
+							select {
+							case <-time.After(time.Second):
+								break l2
+							case <-ctx.Done():
+								if err = consumer.Close(); err != nil {
+									c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+								}
+								return
+							}
+						}
 					}
+					c.subscribed = false
 				}
+				close(subscribeTask.done)
 			default:
 				evt := consumer.Poll(100)
 
@@ -246,10 +277,21 @@ func (c *Consumer) Run(ctx context.Context) {
 }
 
 func (c *Consumer) Subscribe() {
+	t := subscribeTask{
+		subscribe: true,
+		done:      make(chan struct{}),
+	}
+	c.subscribeTaskCh <- t
+	<-t.done
 }
 
 func (c *Consumer) Unsubscribe() {
-
+	t := subscribeTask{
+		subscribe: false,
+		done:      make(chan struct{}),
+	}
+	c.subscribeTaskCh <- t
+	<-t.done
 }
 
 func (c *Consumer) Pause(pause bool, tp kafka.TopicPartition) {
