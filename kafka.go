@@ -154,11 +154,18 @@ func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.Reb
 	}
 }
 
+func (c *Consumer) RunWithoutSubscribing(ctx context.Context) {
+	c.run(ctx, false)
+}
+
 func (c *Consumer) Run(ctx context.Context) {
+	c.run(ctx, true)
+}
+
+func (c *Consumer) run(ctx context.Context, needSubscribing bool) {
 	defer close(c.events)
 
 	for {
-		c.subscribed = false
 		var consumer *kafka.Consumer
 		var err error
 		for consumer, err = kafka.NewConsumer(c.config); err != nil; consumer, err = kafka.NewConsumer(c.config) {
@@ -174,20 +181,22 @@ func (c *Consumer) Run(ctx context.Context) {
 			}
 		}
 
-		for err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
-			c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
-		loop2:
-			for {
-				select {
-				case <-time.After(time.Second):
-					break loop2
-				case <-ctx.Done():
-					return
+		if needSubscribing || c.subscribed {
+			for err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil; err = consumer.SubscribeTopics(c.topics, c.rebalanceCb) {
+				c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+			loop2:
+				for {
+					select {
+					case <-time.After(time.Second):
+						break loop2
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
-		}
 
-		c.subscribed = true
+			c.subscribed = true
+		}
 
 	loop:
 		for {
@@ -234,7 +243,6 @@ func (c *Consumer) Run(ctx context.Context) {
 							}
 						}
 					}
-					c.subscribed = true
 				} else if !subscribeTask.subscribe && c.subscribed {
 					for err = consumer.Unsubscribe(); err != nil; err = consumer.Unsubscribe() {
 						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
@@ -251,8 +259,9 @@ func (c *Consumer) Run(ctx context.Context) {
 							}
 						}
 					}
-					c.subscribed = false
 				}
+				c.subscribed = subscribeTask.subscribe
+				needSubscribing = false
 				close(subscribeTask.done)
 			default:
 				evt := consumer.Poll(100)
