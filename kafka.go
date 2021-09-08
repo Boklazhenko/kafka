@@ -22,6 +22,10 @@ type PauseEvent struct {
 	pause bool
 }
 
+type subscribeTask struct {
+	subscribe bool
+}
+
 func (p PauseEvent) String() string {
 	if p.pause {
 		return fmt.Sprintf("paused: %v", p.tp)
@@ -128,20 +132,22 @@ func (p *Producer) Events() <-chan kafka.Event {
 }
 
 type Consumer struct {
-	events      chan kafka.Event
-	config      *kafka.ConfigMap
-	topics      []string
-	rebalanceCb kafka.RebalanceCb
-	pauseTaskCh chan pauseTask
+	events          chan kafka.Event
+	config          *kafka.ConfigMap
+	topics          []string
+	rebalanceCb     kafka.RebalanceCb
+	pauseTaskCh     chan pauseTask
+	subscribeTaskCh chan subscribeTask
 }
 
 func NewConsumer(config *kafka.ConfigMap, topics []string, rebalanceCb kafka.RebalanceCb) *Consumer {
 	return &Consumer{
-		events:      make(chan kafka.Event, chanBuffSize),
-		config:      config,
-		topics:      topics,
-		rebalanceCb: rebalanceCb,
-		pauseTaskCh: make(chan pauseTask, chanBuffSize),
+		events:          make(chan kafka.Event, chanBuffSize),
+		config:          config,
+		topics:          topics,
+		rebalanceCb:     rebalanceCb,
+		pauseTaskCh:     make(chan pauseTask, chanBuffSize),
+		subscribeTaskCh: make(chan subscribeTask, chanBuffSize),
 	}
 }
 
@@ -159,7 +165,6 @@ func (c *Consumer) Run(ctx context.Context) {
 				select {
 				case <-timeout:
 					break loop1
-				case <-c.pauseTaskCh:
 				case <-ctx.Done():
 					return
 				}
@@ -174,7 +179,6 @@ func (c *Consumer) Run(ctx context.Context) {
 				select {
 				case <-timeout:
 					break loop2
-				case <-c.pauseTaskCh:
 				case <-ctx.Done():
 					return
 				}
@@ -209,6 +213,16 @@ func (c *Consumer) Run(ctx context.Context) {
 						}
 					}
 				}
+			case subscribeTask := <-c.subscribeTaskCh:
+				if subscribeTask.subscribe {
+					if err = consumer.SubscribeTopics(c.topics, c.rebalanceCb); err != nil {
+						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					}
+				} else {
+					if err = consumer.Unsubscribe(); err != nil {
+						c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
+					}
+				}
 			default:
 				evt := consumer.Poll(100)
 
@@ -229,6 +243,13 @@ func (c *Consumer) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (c *Consumer) Subscribe() {
+}
+
+func (c *Consumer) Unsubscribe() {
+
 }
 
 func (c *Consumer) Pause(pause bool, tp kafka.TopicPartition) {
