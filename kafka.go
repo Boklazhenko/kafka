@@ -287,22 +287,22 @@ func (c *Consumer) run(ctx context.Context, needSubscribing bool) {
 	}
 }
 
-func (c *Consumer) Subscribe() {
+func (c *Consumer) Subscribe() chan struct{} {
 	t := subscribeTask{
 		subscribe: true,
 		done:      make(chan struct{}),
 	}
 	c.subscribeTaskCh <- t
-	<-t.done
+	return t.done
 }
 
-func (c *Consumer) Unsubscribe() {
+func (c *Consumer) Unsubscribe() chan struct{} {
 	t := subscribeTask{
 		subscribe: false,
 		done:      make(chan struct{}),
 	}
 	c.subscribeTaskCh <- t
-	<-t.done
+	return t.done
 }
 
 func (c *Consumer) Pause(pause bool, tp kafka.TopicPartition) {
