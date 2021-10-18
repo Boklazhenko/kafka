@@ -239,6 +239,7 @@ func (c *Consumer) run(ctx context.Context, needSubscribing bool) {
 								if err = consumer.Close(); err != nil {
 									c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 								}
+								close(subscribeTask.done)
 								return
 							}
 						}
@@ -255,6 +256,7 @@ func (c *Consumer) run(ctx context.Context, needSubscribing bool) {
 								if err = consumer.Close(); err != nil {
 									c.events <- kafka.NewError(kafka.ErrApplication, err.Error(), false)
 								}
+								close(subscribeTask.done)
 								return
 							}
 						}
