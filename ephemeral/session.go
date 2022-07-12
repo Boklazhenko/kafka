@@ -118,6 +118,15 @@ func (s *session) consume(closeCh chan struct{}, consumer sarama.Consumer, handl
 		go func(pc sarama.PartitionConsumer) {
 			defer wg.Done()
 
+			for err := range pc.Errors() {
+				s.errorCh <- err
+			}
+		}(pc)
+
+		wg.Add(1)
+		go func(pc sarama.PartitionConsumer) {
+			defer wg.Done()
+
 			select {
 			case <-closeCh:
 				_ = pc.Close()
