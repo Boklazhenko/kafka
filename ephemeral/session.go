@@ -3,9 +3,10 @@ package ephemeral
 import (
 	"context"
 	"errors"
+	"sync"
+
 	"github.com/Shopify/sarama"
 	"github.com/google/uuid"
-	"sync"
 )
 
 type session struct {

@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/prometheus/client_golang/prometheus"
 	"sync"
 	"time"
+
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const chanBuffSize = 1000

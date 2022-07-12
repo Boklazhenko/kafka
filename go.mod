@@ -3,12 +3,13 @@ module github.com/Boklazhenko/kafka
 go 1.18
 
 require (
+	github.com/Shopify/sarama v1.34.1
 	github.com/confluentinc/confluent-kafka-go v1.7.0
+	github.com/google/uuid v1.3.0
 	github.com/prometheus/client_golang v1.12.1
 )
 
 require (
-	github.com/Shopify/sarama v1.34.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -17,7 +18,6 @@ require (
 	github.com/eapache/queue v1.1.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/google/uuid v1.3.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.2 // indirect
