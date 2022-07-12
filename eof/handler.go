@@ -39,8 +39,6 @@ func (h *ConsumerGroupHandler) Cleanup(session sarama.ConsumerGroupSession) erro
 }
 
 func (h *ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	<-time.After(5 * time.Second)
-
 	c := newConsumerGroupClaim(claim, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
