@@ -80,7 +80,7 @@ func (s *session) resetOffset(topic string, partition int32, offset int64) {
 	partitionsOffsets[partition] = offset
 }
 
-func (s *session) consume(closeCh chan struct{}, consumer sarama.Consumer, handler func(sarama.ConsumerGroupSession, sarama.ConsumerGroupClaim) error) error {
+func (s *session) consume(ctx context.Context, consumer sarama.Consumer, handler func(sarama.ConsumerGroupSession, sarama.ConsumerGroupClaim) error) error {
 	claims := make([]*claim, 0)
 	pcs := make([]sarama.PartitionConsumer, 0)
 
@@ -127,10 +127,9 @@ func (s *session) consume(closeCh chan struct{}, consumer sarama.Consumer, handl
 		go func(pc sarama.PartitionConsumer) {
 			defer wg.Done()
 
-			select {
-			case <-closeCh:
-				_ = pc.Close()
-			}
+			<-ctx.Done()
+
+			_ = pc.Close()
 		}(pc)
 	}
 
