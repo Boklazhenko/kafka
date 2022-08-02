@@ -34,7 +34,6 @@ func (h *ConsumerGroupHandler) Setup(session sarama.ConsumerGroupSession) error 
 }
 
 func (h *ConsumerGroupHandler) Cleanup(session sarama.ConsumerGroupSession) error {
-	h.eofCh = nil
 	return h.handler.Cleanup(session)
 }
 
