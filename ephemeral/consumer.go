@@ -2,7 +2,7 @@ package ephemeral
 
 import (
 	"context"
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
 )
 
 type Consumer struct {

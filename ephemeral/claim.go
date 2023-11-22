@@ -1,7 +1,7 @@
 package ephemeral
 
 import (
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
 )
 
 type claim struct {
